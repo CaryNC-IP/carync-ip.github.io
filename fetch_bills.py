@@ -50,6 +50,14 @@ except ImportError:
     sys.exit("Missing deps. Run:  pip install requests beautifulsoup4")
 
 BASE = "https://www.ncleg.gov"
+
+
+def _now_iso():
+    """Current time as a timezone-aware UTC ISO string (e.g. 2026-08-05T20:21:00+00:00).
+    The +00:00 marker lets the tracker's browser JS convert it to each viewer's local time."""
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
 WEBSVC = "https://webservices.ncleg.gov"   # ncleg's data service (found via browser Network tab)
 HEADERS = {
     # A normal browser UA — this is the difference-maker vs. the in-browser search that was failing.
@@ -620,7 +628,7 @@ def build(session, keep_all, workers=6):
             "lastAction": la,
             "lastActionDate": lad,
             "introduced": _to_iso(row.get("introduced")),
-            "checkedAt": dt.datetime.now().isoformat(timespec="seconds"),
+            "checkedAt": _now_iso(),
             "discovered": True,
         }
 
@@ -662,7 +670,7 @@ def main():
             sys.exit(0)
         # No prior feed at all: write an empty-but-valid feed so the page has something to read.
         payload = {
-            "generatedAt": dt.datetime.now().isoformat(timespec="seconds"),
+            "generatedAt": _now_iso(),
             "session": args.session, "source": f"{BASE}/Legislation",
             "count": 0, "bills": [],
             "note": "No bills fetched on this run — ncleg.gov may have been unreachable.",
@@ -673,7 +681,7 @@ def main():
         sys.exit(0)
 
     payload = {
-        "generatedAt": dt.datetime.now().isoformat(timespec="seconds"),
+        "generatedAt": _now_iso(),
         "session": args.session,
         "source": f"{BASE}/Legislation",
         "count": len(bills),
