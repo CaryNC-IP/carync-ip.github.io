@@ -199,28 +199,28 @@ def make_bullets(title, summary):
 
 def parse_bill_index(html):
     """
-    Parse the per-session bill index into rows.
-    # >>> VERIFY: ncleg's index renders bills as table rows or list items linking to
-    # /BillLookUp/{session}/{billid}. We locate every such link and read its row context.
+    Parse a bill index/search page into rows. Recognizes bill links in any of ncleg's
+    formats: /BillLookUp/{session}/{Hxxx}, ?BillID=Hxxx, /Bills/House/HTML/Hxxx, etc.
     """
     soup = BeautifulSoup(html, "html.parser")
     rows = {}
-    for a in soup.find_all("a", href=re.compile(r"/BillLookUp/\d+/[HS]\d+", re.I)):
+    # Match a bill id (H123 / S45 / HB123 / SB45) appearing anywhere in an href.
+    link_rx = re.compile(r"(?:BillLookUp/\d+/|BillID=|/)([HS]B?\d{1,4})(?:[/?&\"']|$)", re.I)
+    for a in soup.find_all("a", href=True):
         href = a["href"]
-        m = re.search(r"/BillLookUp/\d+/([HS]\d+)", href, re.I)
+        m = link_rx.search(href)
         if not m:
             continue
-        bid = m.group(1).upper()
-        # Grab the nearest row/list-item as the record context.
+        rawid = m.group(1).upper().replace("B", "")  # HB123 -> H123
+        if not re.fullmatch(r"[HS]\d{1,4}", rawid):
+            continue
+        bid = rawid
         container = a.find_parent(["tr", "li", "div"]) or a.parent
         text = " ".join(container.get_text(" ", strip=True).split())
-        # Title is often the link text or the cell after the id.
         title = a.get_text(" ", strip=True)
-        if re.fullmatch(r"[HS]\d+", title, re.I):
-            # link text was just the number; look for a sibling title cell
-            sibs = container.get_text(" ", strip=True)
-            title = sibs
-        rows.setdefault(bid, {"id": bid, "title": title, "context": text})
+        if re.fullmatch(r"[HS]B?\d+", title, re.I) or len(title) < 4:
+            title = text  # link text was just the number; use the row text
+        rows.setdefault(bid, {"id": bid, "title": title[:300], "context": text[:600]})
     return list(rows.values())
 
 
@@ -298,26 +298,54 @@ def parse_bill_page(html):
 # ---------------------------------------------------------------------------
 def build(session, keep_all, workers=6):
     s = requests.Session()
+    # Prime cookies/session by visiting the site root first (some ASP.NET sites
+    # require this before search endpoints respond).
+    fetch(f"{BASE}/", s)
+
+    # Real ncleg.gov listing endpoints, most-reliable first. These are the bill
+    # SEARCH result pages, which render a table of bills with links to BillLookUp.
     index_urls = [
-        f"{BASE}/Legislation/Legislation/BillsByType/{session}/House",
-        f"{BASE}/Legislation/Legislation/BillsByType/{session}/Senate",
-        # Fallback single index if the by-chamber routes change:
-        f"{BASE}/Legislation/BillLookUp/{session}",
+        # Simple search returning all House/Senate bills for the session:
+        f"{BASE}/Legislation/Legislation/BillsByStatus/{session}",
+        f"{BASE}/BillLookup/{session}",
+        f"{BASE}/Legislation/BillSearch/{session}",
+        # Search results (GET form) — broad query that returns the full list:
+        f"{BASE}/Legislation/Legislation/legislation.html?ID={session}",
+        # Chamber "bills filed" listings:
+        f"{BASE}/Legislation/Legislation/House/{session}",
+        f"{BASE}/Legislation/Legislation/Senate/{session}",
     ]
     raw = {}
+    tried = []
     for url in index_urls:
         html = fetch(url, s)
+        tried.append(url)
         if not html:
             continue
-        for row in parse_bill_index(html):
+        found = parse_bill_index(html)
+        for row in found:
             raw.setdefault(row["id"], row)
+        print(f"  {url} -> {len(found)} bill links")
         if raw:
             break  # first index that yields rows is enough
 
     if not raw:
-        print("No bills parsed from the index. ncleg.gov may be blocking or its "
-              "markup changed — see the # >>> VERIFY notes in parse_bill_index().",
-              file=sys.stderr)
+        print("No bills parsed from any index endpoint. URLs tried:", file=sys.stderr)
+        for u in tried:
+            print("   " + u, file=sys.stderr)
+        # DIAGNOSTIC: dump a sample of whatever the first reachable page returned so we
+        # can see the real markup / real bill-link format and fix the URL or parser.
+        for u in tried:
+            html = fetch(u, s)
+            if html:
+                print(f"\n--- DIAGNOSTIC: first 1500 chars of {u} ---", file=sys.stderr)
+                print(html[:1500], file=sys.stderr)
+                # Show any hrefs that look like bill links, whatever their format:
+                links = re.findall(r'href="([^"]*[Bb]ill[^"]*)"', html)[:20]
+                print("\n--- sample bill-like links on that page ---", file=sys.stderr)
+                for l in links:
+                    print("   " + l, file=sys.stderr)
+                break
         return None
 
     print(f"Index yielded {len(raw)} bills; enriching + filtering…")
