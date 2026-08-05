@@ -173,26 +173,51 @@ def _sentence_case(s):
     return res
 
 
-def make_bullets(title, summary):
+def make_bullets(title, summary, keywords=""):
     """
-    Turn the long 'AN ACT TO ...' summary into prioritized bullets.
-    Splits on clause boundaries; marks code/permit/inspection/licensing clauses p=1.
+    Build prioritized bullets. If a long 'AN ACT TO ...' summary exists, split it into
+    clauses. Otherwise (ncleg bill pages give only a short title), build bullets from the
+    bill's official keywords, which are descriptive (e.g. "BUILDING CODE COUNCIL;
+    BUILDING CODES; COUNCILS"). Code/permit/inspection/licensing items are marked p=1.
     """
-    src = (summary or title or "").strip()
-    src = re.sub(r"\s+\d+\s+", " ", " " + src + " ")            # strip stray line numbers
-    src = re.sub(r"\s+", " ", src).strip().rstrip(".")
-    body = re.sub(r"^AN ACT (TO|PROVIDING|MANDATING|ESTABLISHING|AUTHORIZING)\s+", "",
-                  src, flags=re.I)
-    parts = re.split(r";\s+(?:AND\s+)?TO\s+|,?\s+AND\s+TO\s+|;\s+", body, flags=re.I)
-    parts = [p.strip(" .,") for p in parts if len(p.strip()) > 8]
-
     p1_kw = ["building code", "permit", "inspection", "inspector", "licens",
              "code-enforcement", "code enforcement", "code official", "qualification board",
-             "plan review", "electrical code", "egress", "fire-resistant", "occupancy"]
+             "plan review", "electrical code", "egress", "fire-resistant", "occupancy",
+             "certificat"]
+
+    src = (summary or "").strip()
+    is_long = bool(re.match(r"\s*AN ACT", src, re.I)) or len(src) > 90
     bullets = []
-    for p in parts[:10]:
-        pr = 1 if any(k in p.lower() for k in p1_kw) else 2
-        bullets.append({"t": _sentence_case(p), "p": pr})
+
+    if is_long:
+        s = re.sub(r"\s+\d+\s+", " ", " " + src + " ")
+        s = re.sub(r"\s+", " ", s).strip().rstrip(".")
+        body = re.sub(r"^AN ACT (TO|PROVIDING|MANDATING|ESTABLISHING|AUTHORIZING)\s+", "",
+                      s, flags=re.I)
+        parts = re.split(r";\s+(?:AND\s+)?TO\s+|,?\s+AND\s+TO\s+|;\s+", body, flags=re.I)
+        parts = [p.strip(" .,") for p in parts if len(p.strip()) > 8]
+        for p in parts[:10]:
+            pr = 1 if any(k in p.lower() for k in p1_kw) else 2
+            bullets.append({"t": _sentence_case(p), "p": pr})
+
+    if not bullets and keywords:
+        # Build from keywords: split on ; , and dedupe, priority items first.
+        kws = [k.strip() for k in re.split(r"[;,]", keywords) if len(k.strip()) > 2]
+        # Drop procedural noise that isn't topical.
+        noise = {"presented", "public", "ratified", "chaptered", "local"}
+        kws = [k for k in kws if k.lower() not in noise]
+        seen, ordered = set(), []
+        for k in kws:
+            kl = k.lower()
+            if kl in seen:
+                continue
+            seen.add(kl)
+            pr = 1 if any(p in kl for p in p1_kw) else 2
+            ordered.append((pr, _sentence_case(k)))
+        ordered.sort(key=lambda x: x[0])          # priority items first
+        for pr, txt in ordered[:8]:
+            bullets.append({"t": txt, "p": pr})
+
     if not bullets:
         bullets = [{"t": _sentence_case(title) or "See bill text", "p": 2}]
     return bullets
@@ -387,16 +412,24 @@ def fetch_all_bills(session, s):
         parsed = None
 
     def collect_from_obj(obj):
-        """Walk a JSON structure and pull out anything that looks like a bill record."""
+        """Walk a JSON structure and pull out anything that looks like a bill record.
+        Handles ncleg's AllBills shape: {"chamber":"H","billNumber":768}."""
         out = []
         def walk(x):
             if isinstance(x, dict):
-                bid = _norm_id(_first(x, "BillID", "Bill", "BillNumber", "Number", "billID", "billNumber"))
+                # ncleg AllBills: chamber ('H'/'S') + billNumber (int).
+                ch = _first(x, "chamber", "Chamber")
+                num = _first(x, "billNumber", "BillNumber", "Number")
+                bid = None
+                if ch and num is not None and str(ch).strip().upper() in ("H", "S"):
+                    bid = str(ch).strip().upper() + str(num).strip()
+                if not bid:
+                    bid = _norm_id(_first(x, "BillID", "Bill", "billID"))
                 title = _first(x, "ShortTitle", "Title", "Caption", "shortTitle", "Description")
                 if bid:
                     out.append({"id": bid, "title": str(title or bid),
                                 "context": str(title or ""),
-                                "chamber": _first(x, "Chamber", "chamber"),
+                                "chamber": ch,
                                 "lastAction": _first(x, "LatestAction", "LastAction", "Action"),
                                 "lastActionDate": _first(x, "LatestActionDate", "ActionDate", "LastActionDate"),
                                 "introduced": _first(x, "FiledDate", "IntroducedDate", "DateIntroduced")})
@@ -467,56 +500,65 @@ def _stage_from_action(action, session_law):
 
 def fetch_bill_detail(session, bid, s):
     """
-    Try the web service for a per-bill detail record (long title, latest action, status).
-    Tries a few plausible routes; returns {} quietly if none respond, so the list-row
-    data remains the source of truth. Logs ONE diagnostic if the first bill finds nothing.
+    Fetch a single bill's detail by scraping its ncleg.gov page:
+        https://www.ncleg.gov/BillLookUp/{session}/{bid}
+    Individual bill pages ARE server-rendered (unlike the JS-loaded master list),
+    so the title, last action, keywords, etc. are present in the HTML.
+    Structure confirmed from a real page: label/value pairs in <div class="misc-info-label">,
+    short title in the first PDF <a> link, session law in <title>.
+    Returns a normalized dict, or {}.
     """
-    routes = [
-        f"{WEBSVC}/BillDetail/{session}/{bid}",
-        f"{WEBSVC}/Bill/{session}/{bid}",
-        f"{WEBSVC}/BillInfo/{session}/{bid}",
-    ]
-    hdrs = dict(HEADERS)
-    hdrs["Accept"] = "application/json, text/xml;q=0.9, */*;q=0.8"
-    for url in routes:
-        try:
-            r = s.get(url, headers=hdrs, timeout=TIMEOUT)
-        except requests.RequestException:
-            continue
-        if r.status_code != 200 or not r.text.strip():
-            continue
-        text = r.text
-        obj = None
-        try:
-            obj = json.loads(text)
-        except ValueError:
-            obj = None
-        if isinstance(obj, dict):
-            long_title = _first(obj, "LongTitle", "Title", "ShortTitle", "Caption")
-            la = _first(obj, "LatestAction", "LastAction", "Action")
-            lad = _first(obj, "LatestActionDate", "LastActionDate", "ActionDate")
-            sl = _first(obj, "SessionLaw", "ChapterSL", "SLNumber")
-            if long_title or la:
-                return {"long_title": str(long_title or ""),
-                        "lastAction": str(la) if la else None,
-                        "lastActionDate": lad,
-                        "sessionLaw": (re.search(r"\d{4}-\d+", str(sl)).group(0)
-                                       if sl and re.search(r"\d{4}-\d+", str(sl)) else None),
-                        "stage": None}
-        # XML fallback
-        if "<" in text[:100]:
-            soup = BeautifulSoup(text, "xml")
-            blob = soup.get_text(" ", strip=True)
-            m = re.search(r"AN ACT [^<]{5,600}", blob, re.I)
-            if m:
-                return {"long_title": m.group(0), "lastAction": None,
-                        "lastActionDate": None, "sessionLaw": None, "stage": None}
-    if not _detail_diag_done[0]:
-        _detail_diag_done[0] = True
-        print(f"  (note) per-bill detail routes returned nothing for {bid}; "
-              f"using list-row data. This is fine if titles/actions look right.",
-              file=sys.stderr)
-    return {}
+    url = f"{BASE}/BillLookUp/{session}/{bid}"
+    html = fetch(url, s)
+    if not html:
+        return {}
+    soup = BeautifulSoup(html, "html.parser")
+    out = {"long_title": "", "short_title": "", "keywords": "",
+           "lastAction": None, "lastActionDate": None, "sessionLaw": None, "stage": None}
+
+    # Session law from the <title> tag.
+    t = soup.find("title")
+    ttl = t.get_text(" ", strip=True) if t else ""
+    m = re.search(r"SL\s*(\d{4}-\d+)", ttl)
+    if m:
+        out["sessionLaw"] = m.group(1)
+
+    # Short title: the first PDF link under the header.
+    a = soup.find("a", href=re.compile(r"/Bills/.*\.pdf", re.I))
+    if a:
+        out["short_title"] = a.get_text(" ", strip=True).rstrip(".")
+
+    # Label/value pairs (Last Action, Sponsors, Keywords, Statutes, ...).
+    labels = {}
+    for lab in soup.find_all("div", class_="misc-info-label"):
+        key = lab.get_text(" ", strip=True).rstrip(":").lower()
+        val = lab.find_next_sibling("div")
+        if val:
+            labels[key] = val.get_text(" ", strip=True)
+
+    la = labels.get("last action")
+    if la:
+        out["lastAction"] = la
+        out["lastActionDate"] = _to_iso(la)   # _to_iso pulls the m/d/Y out of the string
+    out["keywords"] = labels.get("keywords", "")
+    out["long_title"] = out["short_title"]    # bill pages carry the short title; that's the display title
+
+    # Stage from last-action text (+ session law).
+    al = (la or "").lower()
+    if out["sessionLaw"] or "ch. sl" in al or "became law" in al:
+        out["stage"] = "law"
+    elif "veto" in al:
+        out["stage"] = "vetoed"
+    elif "ratified" in al or "ch. res" in al:
+        out["stage"] = "passed_both"
+    elif "passed 3rd reading" in al or "passed third reading" in al:
+        out["stage"] = "passed_house"
+    elif "com" in al and ("ref" in al or "re-ref" in al):
+        out["stage"] = "committee"
+    else:
+        out["stage"] = "filed"
+
+    return out
 
 
 def build(session, keep_all, workers=6):
@@ -543,17 +585,22 @@ def build(session, keep_all, workers=6):
 
     def process(row):
         bid = row["id"]
-        title = (row.get("title") or "").strip() or bid
-        # The list row usually carries the short title + latest action already.
-        # Try the web service for a richer per-bill record (long title / status);
-        # if it isn't available, fall back cleanly to the list row.
-        long_title = row.get("context") or title
-        info = {}
+        list_title = (row.get("title") or "").strip()
         detail = fetch_bill_detail(session, bid, s)
-        if detail:
-            long_title = detail.get("long_title") or long_title
-            info = detail
-        tags, firearms = classify(f"{title} {long_title}")
+        # One-time diagnostic: dump the first bill's raw detail so field names are visible
+        # in the log even if my mapping missed something.
+        if not _detail_diag_done[0]:
+            _detail_diag_done[0] = True
+            print("Sample detail parsed:", json.dumps({
+                k: (str(v)[:90] if v else v) for k, v in (detail or {}).items()}), file=sys.stderr)
+        info = detail or {}
+        # Prefer the detail's short title for display; fall back to list title or id.
+        title = (info.get("short_title") or list_title or bid).strip()
+        long_title = info.get("long_title") or title
+        keywords = info.get("keywords") or ""
+        # Classify on title + long title + keywords (ncleg keywords are rich, e.g.
+        # "BUILDING CODE COUNCIL; BUILDING CODES").
+        tags, firearms = classify(f"{title} {long_title} {keywords}")
         chamber = row.get("chamber")
         chamber = ("Senate" if str(chamber).lower().startswith("s") else "House") if chamber else \
                   ("House" if bid.startswith("H") else "Senate")
@@ -565,7 +612,7 @@ def build(session, keep_all, workers=6):
             "chamber": chamber,
             "title": _sentence_case(title.rstrip(".")),
             "summary": _sentence_case(long_title),
-            "bullets": make_bullets(title, long_title),
+            "bullets": make_bullets(title, long_title, keywords),
             "tags": tags,
             "firearms": firearms,
             "stage": stage,
