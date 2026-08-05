@@ -50,6 +50,7 @@ except ImportError:
     sys.exit("Missing deps. Run:  pip install requests beautifulsoup4")
 
 BASE = "https://www.ncleg.gov"
+WEBSVC = "https://webservices.ncleg.gov"   # ncleg's data service (found via browser Network tab)
 HEADERS = {
     # A normal browser UA — this is the difference-maker vs. the in-browser search that was failing.
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -294,87 +295,284 @@ def parse_bill_page(html):
 
 
 # ---------------------------------------------------------------------------
+# Bill list from the ncleg web service (AllBills/{session})
+# ---------------------------------------------------------------------------
+def _first(d, *names):
+    """Return the first present, non-empty value among candidate key names (case-insensitive)."""
+    if not isinstance(d, dict):
+        return None
+    lower = {k.lower(): v for k, v in d.items()}
+    for n in names:
+        v = lower.get(n.lower())
+        if v not in (None, "", []):
+            return v
+    return None
+
+
+def _norm_id(raw):
+    """'H 768' / 'HB768' / 'House Bill 768' -> 'H768'."""
+    if raw is None:
+        return None
+    t = str(raw).upper()
+    m = re.search(r"\b([HS])(?:OUSE|ENATE)?\s*B?(?:ILL)?\s*0*(\d{1,4})\b", t)
+    if m:
+        return m.group(1) + m.group(2)
+    m = re.search(r"\b([HS])\s*0*(\d{1,4})\b", t)
+    return (m.group(1) + m.group(2)) if m else None
+
+
+def _to_iso(val):
+    """Normalize a date value (various formats or ISO datetime) to YYYY-MM-DD, or None."""
+    if not val:
+        return None
+    sval = str(val).strip()
+    if not sval:
+        return None
+    # Already ISO date or datetime.
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", sval)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    # .NET style /Date(...)/ epoch millis.
+    m = re.search(r"/Date\((\d+)", sval)
+    if m:
+        try:
+            return dt.datetime.utcfromtimestamp(int(m.group(1)) / 1000).date().isoformat()
+        except (ValueError, OSError):
+            return None
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%b %d, %Y", "%B %d, %Y", "%Y/%m/%d"):
+        try:
+            return dt.datetime.strptime(sval[:len(fmt) + 4], fmt).date().isoformat()
+        except ValueError:
+            continue
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", sval)
+    if m:
+        try:
+            return dt.date(int(m.group(3)), int(m.group(1)), int(m.group(2))).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def fetch_all_bills(session, s):
+    """
+    Pull the full bill list from https://webservices.ncleg.gov/AllBills/{session}.
+    Handles JSON or XML. Returns list of {id,title,context,...} rows.
+    On unexpected shapes, prints a diagnostic sample and returns [].
+    """
+    url = f"{WEBSVC}/AllBills/{session}"
+    hdrs = dict(HEADERS)
+    hdrs["Accept"] = "application/json, text/xml, application/xml;q=0.9, */*;q=0.8"
+    text = None
+    for attempt in range(RETRIES):
+        try:
+            r = s.get(url, headers=hdrs, timeout=TIMEOUT)
+            if r.status_code == 200:
+                text = r.text
+                ctype = r.headers.get("Content-Type", "")
+                break
+            print(f"  ! {url} -> HTTP {r.status_code}", file=sys.stderr)
+        except requests.RequestException as e:
+            print(f"  ! {url} -> {type(e).__name__}", file=sys.stderr)
+        time.sleep(1.5 * (attempt + 1))
+    if not text:
+        return []
+
+    records = []
+
+    # --- Try JSON first ---
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+
+    def collect_from_obj(obj):
+        """Walk a JSON structure and pull out anything that looks like a bill record."""
+        out = []
+        def walk(x):
+            if isinstance(x, dict):
+                bid = _norm_id(_first(x, "BillID", "Bill", "BillNumber", "Number", "billID", "billNumber"))
+                title = _first(x, "ShortTitle", "Title", "Caption", "shortTitle", "Description")
+                if bid:
+                    out.append({"id": bid, "title": str(title or bid),
+                                "context": str(title or ""),
+                                "chamber": _first(x, "Chamber", "chamber"),
+                                "lastAction": _first(x, "LatestAction", "LastAction", "Action"),
+                                "lastActionDate": _first(x, "LatestActionDate", "ActionDate", "LastActionDate"),
+                                "introduced": _first(x, "FiledDate", "IntroducedDate", "DateIntroduced")})
+                for v in x.values():
+                    walk(v)
+            elif isinstance(x, list):
+                for v in x:
+                    walk(v)
+        walk(obj)
+        return out
+
+    if parsed is not None:
+        records = collect_from_obj(parsed)
+
+    # --- Fall back to XML ---
+    if not records and ("<" in text[:200]):
+        try:
+            soup = BeautifulSoup(text, "xml")
+        except Exception:
+            soup = BeautifulSoup(text, "html.parser")
+        # Each bill is typically its own element; scan all tags for a bill-id child/attr.
+        for el in soup.find_all(True):
+            blob = " ".join(el.get_text(" ", strip=True).split()) if hasattr(el, "get_text") else ""
+            bid = _norm_id(el.get("BillID") if el.has_attr and el.has_attr("BillID") else None) \
+                  or _norm_id(blob[:20])
+            if not bid:
+                continue
+            records.append({"id": bid, "title": blob[:300], "context": blob[:600],
+                            "chamber": None, "lastAction": None,
+                            "lastActionDate": None, "introduced": None})
+
+    # De-dupe by id.
+    dedup = {}
+    for r in records:
+        if r["id"] and r["id"] not in dedup:
+            dedup[r["id"]] = r
+
+    if not dedup:
+        print(f"\n--- DIAGNOSTIC: {url} returned data but no bills parsed ---", file=sys.stderr)
+        print(f"Content-Type: {ctype}", file=sys.stderr)
+        print("First 2000 chars:\n" + text[:2000], file=sys.stderr)
+        return []
+
+    return list(dedup.values())
+
+
+# ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
+_detail_diag_done = [False]
+
+def _stage_from_action(action, session_law):
+    a = (action or "").lower()
+    if session_law or "ch. sl" in a or "became law" in a or "signed by gov" in a:
+        return "law"
+    if "veto" in a:
+        return "vetoed"
+    if "ratified" in a or "ch. res" in a:
+        return "passed_both"
+    if "passed 3rd reading" in a or "passed third reading" in a:
+        return "passed_house"
+    if "com" in a and ("ref" in a or "re-ref" in a):
+        return "committee"
+    if "filed" in a:
+        return "filed"
+    return "filed"
+
+
+def fetch_bill_detail(session, bid, s):
+    """
+    Try the web service for a per-bill detail record (long title, latest action, status).
+    Tries a few plausible routes; returns {} quietly if none respond, so the list-row
+    data remains the source of truth. Logs ONE diagnostic if the first bill finds nothing.
+    """
+    routes = [
+        f"{WEBSVC}/BillDetail/{session}/{bid}",
+        f"{WEBSVC}/Bill/{session}/{bid}",
+        f"{WEBSVC}/BillInfo/{session}/{bid}",
+    ]
+    hdrs = dict(HEADERS)
+    hdrs["Accept"] = "application/json, text/xml;q=0.9, */*;q=0.8"
+    for url in routes:
+        try:
+            r = s.get(url, headers=hdrs, timeout=TIMEOUT)
+        except requests.RequestException:
+            continue
+        if r.status_code != 200 or not r.text.strip():
+            continue
+        text = r.text
+        obj = None
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            obj = None
+        if isinstance(obj, dict):
+            long_title = _first(obj, "LongTitle", "Title", "ShortTitle", "Caption")
+            la = _first(obj, "LatestAction", "LastAction", "Action")
+            lad = _first(obj, "LatestActionDate", "LastActionDate", "ActionDate")
+            sl = _first(obj, "SessionLaw", "ChapterSL", "SLNumber")
+            if long_title or la:
+                return {"long_title": str(long_title or ""),
+                        "lastAction": str(la) if la else None,
+                        "lastActionDate": lad,
+                        "sessionLaw": (re.search(r"\d{4}-\d+", str(sl)).group(0)
+                                       if sl and re.search(r"\d{4}-\d+", str(sl)) else None),
+                        "stage": None}
+        # XML fallback
+        if "<" in text[:100]:
+            soup = BeautifulSoup(text, "xml")
+            blob = soup.get_text(" ", strip=True)
+            m = re.search(r"AN ACT [^<]{5,600}", blob, re.I)
+            if m:
+                return {"long_title": m.group(0), "lastAction": None,
+                        "lastActionDate": None, "sessionLaw": None, "stage": None}
+    if not _detail_diag_done[0]:
+        _detail_diag_done[0] = True
+        print(f"  (note) per-bill detail routes returned nothing for {bid}; "
+              f"using list-row data. This is fine if titles/actions look right.",
+              file=sys.stderr)
+    return {}
+
+
 def build(session, keep_all, workers=6):
     s = requests.Session()
-    # Prime cookies/session by visiting the site root first (some ASP.NET sites
-    # require this before search endpoints respond).
-    fetch(f"{BASE}/", s)
+    fetch(f"{BASE}/", s)   # prime session cookies
 
-    # Real ncleg.gov listing endpoints, most-reliable first. These are the bill
-    # SEARCH result pages, which render a table of bills with links to BillLookUp.
-    index_urls = [
-        # Simple search returning all House/Senate bills for the session:
-        f"{BASE}/Legislation/Legislation/BillsByStatus/{session}",
-        f"{BASE}/BillLookup/{session}",
-        f"{BASE}/Legislation/BillSearch/{session}",
-        # Search results (GET form) — broad query that returns the full list:
-        f"{BASE}/Legislation/Legislation/legislation.html?ID={session}",
-        # Chamber "bills filed" listings:
-        f"{BASE}/Legislation/Legislation/House/{session}",
-        f"{BASE}/Legislation/Legislation/Senate/{session}",
-    ]
     raw = {}
-    tried = []
-    for url in index_urls:
-        html = fetch(url, s)
-        tried.append(url)
-        if not html:
-            continue
-        found = parse_bill_index(html)
-        for row in found:
-            raw.setdefault(row["id"], row)
-        print(f"  {url} -> {len(found)} bill links")
-        if raw:
-            break  # first index that yields rows is enough
+    for row in fetch_all_bills(session, s):
+        raw.setdefault(row["id"], row)
+    print(f"AllBills/{session} yielded {len(raw)} bills.")
 
     if not raw:
-        print("No bills parsed from any index endpoint. URLs tried:", file=sys.stderr)
-        for u in tried:
-            print("   " + u, file=sys.stderr)
-        # DIAGNOSTIC: dump a sample of whatever the first reachable page returned so we
-        # can see the real markup / real bill-link format and fix the URL or parser.
-        for u in tried:
-            html = fetch(u, s)
-            if html:
-                print(f"\n--- DIAGNOSTIC: first 1500 chars of {u} ---", file=sys.stderr)
-                print(html[:1500], file=sys.stderr)
-                # Show any hrefs that look like bill links, whatever their format:
-                links = re.findall(r'href="([^"]*[Bb]ill[^"]*)"', html)[:20]
-                print("\n--- sample bill-like links on that page ---", file=sys.stderr)
-                for l in links:
-                    print("   " + l, file=sys.stderr)
-                break
+        print("No bills returned from the web service. See any DIAGNOSTIC output above.",
+              file=sys.stderr)
         return None
 
-    print(f"Index yielded {len(raw)} bills; enriching + filtering…")
+    print(f"Enriching + filtering {len(raw)} bills…")
+
+    # One-time diagnostic: show the first row so we can see exactly what AllBills provides.
+    sample = next(iter(raw.values()))
+    print("Sample list row:", json.dumps({k: (str(v)[:80] if v else v) for k, v in sample.items()}))
 
     bills = []
 
     def process(row):
         bid = row["id"]
-        tags, firearms = classify(row.get("context", "") + " " + row.get("title", ""))
-        # Enrich from the bill page (long title, latest action, status).
-        page = fetch(f"{BASE}/BillLookUp/{session}/{bid}", s)
-        info = parse_bill_page(page) if page else {}
         title = (row.get("title") or "").strip() or bid
-        long_title = info.get("long_title") or ""
-        # Re-classify with the richer long title.
+        # The list row usually carries the short title + latest action already.
+        # Try the web service for a richer per-bill record (long title / status);
+        # if it isn't available, fall back cleanly to the list row.
+        long_title = row.get("context") or title
+        info = {}
+        detail = fetch_bill_detail(session, bid, s)
+        if detail:
+            long_title = detail.get("long_title") or long_title
+            info = detail
         tags, firearms = classify(f"{title} {long_title}")
+        chamber = row.get("chamber")
+        chamber = ("Senate" if str(chamber).lower().startswith("s") else "House") if chamber else \
+                  ("House" if bid.startswith("H") else "Senate")
+        la = info.get("lastAction") or row.get("lastAction")
+        lad = _to_iso(info.get("lastActionDate") or row.get("lastActionDate"))
+        stage = info.get("stage") or _stage_from_action(la, info.get("sessionLaw"))
         return {
             "id": bid,
-            "chamber": "House" if bid.startswith("H") else "Senate",
+            "chamber": chamber,
             "title": _sentence_case(title.rstrip(".")),
             "summary": _sentence_case(long_title),
             "bullets": make_bullets(title, long_title),
             "tags": tags,
             "firearms": firearms,
-            "stage": info.get("stage", "filed"),
+            "stage": stage,
             "sessionLaw": info.get("sessionLaw"),
-            "lastAction": info.get("lastAction"),
-            "lastActionDate": info.get("lastActionDate"),
-            "introduced": None,
+            "lastAction": la,
+            "lastActionDate": lad,
+            "introduced": _to_iso(row.get("introduced")),
             "checkedAt": dt.datetime.now().isoformat(timespec="seconds"),
             "discovered": True,
         }
