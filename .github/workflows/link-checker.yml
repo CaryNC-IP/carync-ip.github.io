@@ -1,0 +1,131 @@
+name: Check Resource Links
+
+on:
+  schedule:
+    # Run every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+jobs:
+  check-links:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Check links in resources.json
+        id: check
+        run: |
+          npm install node-fetch@2
+          node - <<'EOF'
+          const fs = require('fs');
+          const fetch = require('node-fetch');
+          
+          // Load resources
+          const resources = JSON.parse(fs.readFileSync('resource-hub/resources.json', 'utf8'));
+          
+          const linkStatus = {};
+          const now = new Date().toISOString().split('T')[0];
+          
+          // Extract all URLs
+          const urls = [];
+          resources.categories.forEach(category => {
+            category.items.forEach(item => {
+              if (item.url && item.url !== '#') {
+                urls.push({ url: item.url, title: item.title });
+              }
+            });
+          });
+          
+          // Check each URL
+          (async () => {
+            for (const link of urls) {
+              try {
+                const response = await fetch(link.url, {
+                  method: 'HEAD',
+                  timeout: 5000,
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (compatible; link-checker)'
+                  }
+                }).catch(() => fetch(link.url, { timeout: 5000 }));
+                
+                if (response.ok) {
+                  linkStatus[link.url] = {
+                    broken: false,
+                    warning: false,
+                    lastChecked: now,
+                    status: response.status
+                  };
+                } else if (response.status >= 400 && response.status < 500) {
+                  linkStatus[link.url] = {
+                    broken: true,
+                    warning: false,
+                    lastChecked: now,
+                    status: response.status
+                  };
+                } else {
+                  linkStatus[link.url] = {
+                    broken: false,
+                    warning: true,
+                    lastChecked: now,
+                    status: response.status
+                  };
+                }
+              } catch (err) {
+                linkStatus[link.url] = {
+                  broken: true,
+                  warning: false,
+                  lastChecked: now,
+                  error: err.message
+                };
+              }
+            }
+            
+            // Save results
+            fs.writeFileSync('resource-hub/link-status.json', JSON.stringify(linkStatus, null, 2));
+            
+            // Generate report
+            const brokenLinks = Object.entries(linkStatus)
+              .filter(([_, status]) => status.broken)
+              .map(([url, status]) => `- ${url} (Status: ${status.status || 'Error'})`);
+            
+            if (brokenLinks.length > 0) {
+              console.log('⚠️ BROKEN LINKS FOUND:');
+              console.log(brokenLinks.join('\n'));
+            } else {
+              console.log('✓ All links are active!');
+            }
+          })();
+          EOF
+      
+      - name: Commit and push link status
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add resource-hub/link-status.json
+          git commit -m "Update link status - $(date -u +'%Y-%m-%d')" || true
+          git push
+      
+      - name: Send email notification on broken links
+        if: failure()
+        uses: davisb10/action-send-email@v1
+        with:
+          server_address: ${{ secrets.EMAIL_SERVER }}
+          server_port: ${{ secrets.EMAIL_PORT }}
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "I&P Resource Hub - Broken Links Detected"
+          to: bryan.webb@carync.gov
+          from: "github-actions@carync.gov"
+          body: |
+            A link check found broken or problematic links in the I&P Resource Hub.
+            
+            Please review: https://carync-ip.github.io/resource-hub/
+            
+            Visit the Actions tab in GitHub for detailed results.
