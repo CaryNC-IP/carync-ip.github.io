@@ -1,0 +1,147 @@
+{
+  "lastUpdated": "2026-10-06",
+  "categories": [
+    {
+      "id": "policies",
+      "name": "Policies & Procedures",
+      "icon": "📋",
+      "description": "Department policies, procedures, and official guidelines",
+      "items": [
+        {
+          "title": "I&P Career Ladder",
+          "description": "Code Enforcement Official Career Ladder policy",
+          "url": "https://carync.box.com/s/y8j93saxvd16yfzocptli347n9enmi4q",
+          "type": "Policy"
+        },
+        {
+          "title": "Concurrent Submittal Policy",
+          "description": "Policy on concurrent building permit submittal during Development Plan Review",
+          "url": "#",
+          "type": "Policy"
+        }
+      ]
+    },
+    {
+      "id": "benefits",
+      "name": "Benefits Information",
+      "icon": "💼",
+      "description": "Employee benefits, retirement, and compensation resources",
+      "items": [
+        {
+          "title": "LGERS Pension Information",
+          "description": "Local Government Employees' Retirement System (LGERS) benefits and information",
+          "url": "#",
+          "type": "Benefit"
+        },
+        {
+          "title": "Health Insurance Plans",
+          "description": "Town of Cary health insurance options and enrollment information",
+          "url": "#",
+          "type": "Benefit"
+        }
+      ]
+    },
+    {
+      "id": "forms",
+      "name": "Forms & Documents",
+      "icon": "📄",
+      "description": "Common forms, checklists, and documentation templates",
+      "items": [
+        {
+          "title": "ESRI Workforce and Points Spreadsheets",
+          "description": "Workforce management and inspection capacity points tracking",
+          "url": "https://sites.google.com/view/carync",
+          "type": "Spreadsheet"
+        },
+        {
+          "title": "Inspection Report Template",
+          "description": "Standard template for inspection documentation",
+          "url": "#",
+          "type": "Form"
+        }
+      ]
+    },
+    {
+      "id": "training",
+      "name": "Training Materials",
+      "icon": "🎓",
+      "description": "Training resources, courses, and professional development materials",
+      "items": [
+        {
+          "title": "I&P Training Resources",
+          "description": "Comprehensive training resources for inspectors and code officials",
+          "url": "https://carync.app.box.com/folder/90403604093?s=hxcetug3ylrsmy0jrbs6aqk6ydqic105",
+          "type": "Folder"
+        },
+        {
+          "title": "Building Code Updates",
+          "description": "Latest building code changes and training materials",
+          "url": "#",
+          "type": "Resource"
+        }
+      ]
+    },
+    {
+      "id": "team-folder",
+      "name": "I&P Team Box Folder",
+      "icon": "📁",
+      "description": "Main team folder for shared documents and collaboration",
+      "items": [
+        {
+          "title": "Main Team Folder",
+          "description": "Central repository for all I&P department shared documents",
+          "url": "#",
+          "type": "Folder"
+        }
+      ]
+    },
+    {
+      "id": "notices",
+      "name": "Department Notices",
+      "icon": "📢",
+      "description": "Recent announcements, memos, and departmental updates",
+      "items": [
+        {
+          "title": "Recent Announcements",
+          "description": "Latest departmental announcements and news",
+          "url": "#",
+          "type": "Notice"
+        }
+      ]
+    },
+    {
+      "id": "career",
+      "name": "Career Ladder",
+      "icon": "🎯",
+      "description": "Career development and progression information",
+      "items": [
+        {
+          "title": "Code Enforcement Official Progression",
+          "description": "Career path and advancement opportunities for code officials",
+          "url": "https://carync.box.com/s/y8j93saxvd16yfzocptli347n9enmi4q",
+          "type": "Policy"
+        }
+      ]
+    },
+    {
+      "id": "compensation",
+      "name": "Compensation",
+      "icon": "💰",
+      "description": "Salary information, compensation structure, and pay details",
+      "items": [
+        {
+          "title": "Salary Schedule",
+          "description": "Current fiscal year salary schedule and pay grades",
+          "url": "#",
+          "type": "Document"
+        },
+        {
+          "title": "Compensation Policy",
+          "description": "Town of Cary compensation and pay policies",
+          "url": "#",
+          "type": "Policy"
+        }
+      ]
+    }
+  ]
+}
