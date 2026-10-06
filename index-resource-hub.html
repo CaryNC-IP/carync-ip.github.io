@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>I&P Department Resource Hub</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+      background-color: #f5f7fa;
+      color: #1a202c;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    #root {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .resource-hub {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+    }
+
+    .hub-header {
+      background: linear-gradient(135deg, #2c5aa0 0%, #1a365d 100%);
+      color: white;
+      padding: 3rem 2rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .header-content {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .hub-header h1 {
+      font-size: 2rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .hub-header p {
+      font-size: 1.1rem;
+      opacity: 0.95;
+    }
+
+    .hub-container {
+      display: flex;
+      flex: 1;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+      gap: 2rem;
+      padding: 2rem;
+    }
+
+    .sidebar {
+      width: 280px;
+      flex-shrink: 0;
+    }
+
+    .search-box {
+      margin-bottom: 2rem;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      transition: border-color 0.2s;
+    }
+
+    .search-input:focus {
+      outline: none;
+      border-color: #2c5aa0;
+      box-shadow: 0 0 0 3px rgba(44, 90, 160, 0.1);
+    }
+
+    .categories {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .category-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.75rem;
+      border: none;
+      background: white;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: left;
+      font-size: 0.95rem;
+      color: #4a5568;
+      border-left: 3px solid transparent;
+      font-family: inherit;
+    }
+
+    .category-btn:hover {
+      background-color: #f0f4f8;
+      transform: translateX(4px);
+    }
+
+    .category-btn.active {
+      background-color: #eef2f9;
+      color: #2c5aa0;
+      border-left-color: #2c5aa0;
+      font-weight: 600;
+    }
+
+    .category-btn .icon {
+      font-size: 1.25rem;
+      min-width: 1.5rem;
+    }
+
+    .category-btn .label {
+      flex: 1;
+    }
+
+    .category-btn .count {
+      background: #e2e8f0;
+      color: #4a5568;
+      font-size: 0.8rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .category-btn.active .count {
+      background: #2c5aa0;
+      color: white;
+    }
+
+    .content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .section-header {
+      margin-bottom: 2rem;
+    }
+
+    .section-header h2 {
+      font-size: 1.75rem;
+      color: #1a202c;
+      margin-bottom: 0.5rem;
+    }
+
+    .section-description {
+      color: #718096;
+      font-size: 0.95rem;
+    }
+
+    .resources-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .resource-card {
+      background: white;
+      border-radius: 10px;
+      padding: 1.5rem;
+      text-decoration: none;
+      color: inherit;
+      border: 1px solid #e2e8f0;
+      transition: all 0.3s ease;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      cursor: pointer;
+    }
+
+    .resource-card:hover {
+      border-color: #2c5aa0;
+      box-shadow: 0 8px 24px rgba(44, 90, 160, 0.12);
+      transform: translateY(-4px);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .card-header h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #2c5aa0;
+      flex: 1;
+    }
+
+    .status-badge {
+      padding: 0.35rem 0.7rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      white-space: nowrap;
+      cursor: help;
+    }
+
+    .status-badge.active {
+      background-color: #c6f6d5;
+      color: #22543d;
+    }
+
+    .status-badge.warning {
+      background-color: #feebc8;
+      color: #7c2d12;
+    }
+
+    .status-badge.broken {
+      background-color: #fed7d7;
+      color: #742a2a;
+    }
+
+    .card-description {
+      color: #718096;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+      flex: 1;
+    }
+
+    .card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 1rem;
+      border-top: 1px solid #e2e8f0;
+      font-size: 0.85rem;
+    }
+
+    .resource-type {
+      background: #f0f4f8;
+      color: #4a5568;
+      padding: 0.25rem 0.65rem;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+
+    .external-link {
+      color: #2c5aa0;
+      font-weight: 600;
+      transition: transform 0.2s;
+    }
+
+    .resource-card:hover .external-link {
+      transform: translateX(4px);
+    }
+
+    .no-results {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: #718096;
+    }
+
+    .no-results p {
+      font-size: 1.1rem;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 2rem;
+      color: #718096;
+    }
+
+    .last-checked {
+      font-size: 0.8rem;
+      color: #a0aec0;
+      margin-top: 1rem;
+      text-align: center;
+    }
+
+    @media (max-width: 768px) {
+      .hub-container {
+        flex-direction: column;
+        gap: 1.5rem;
+        padding: 1.5rem;
+      }
+
+      .sidebar {
+        width: 100%;
+      }
+
+      .categories {
+        flex-direction: row;
+        flex-wrap: wrap;
+      }
+
+      .category-btn {
+        flex: 1;
+        min-width: 150px;
+      }
+
+      .resources-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hub-header h1 {
+        font-size: 1.5rem;
+      }
+
+      .hub-header {
+        padding: 2rem 1.5rem;
+      }
+
+      .section-header h2 {
+        font-size: 1.3rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function ResourceHub() {
+      const [resources, setResources] = useState([]);
+      const [selectedCategory, setSelectedCategory] = useState(null);
+      const [searchTerm, setSearchTerm] = useState('');
+      const [linkStatus, setLinkStatus] = useState({});
+      const [loading, setLoading] = useState(true);
+      const [lastChecked, setLastChecked] = useState(null);
+
+      useEffect(() => {
+        // Load resources
+        fetch('resources.json')
+          .then(res => res.json())
+          .then(data => {
+            setResources(data.categories);
+            if (data.categories.length > 0) {
+              setSelectedCategory(data.categories[0].id);
+            }
+            setLastChecked(data.lastUpdated);
+          })
+          .catch(err => {
+            console.error('Error loading resources:', err);
+            setLoading(false);
+          });
+
+        // Load link status if available
+        fetch('link-status.json')
+          .then(res => res.json())
+          .then(data => {
+            setLinkStatus(data);
+            setLoading(false);
+          })
+          .catch(err => {
+            console.warn('Link status not yet available');
+            setLoading(false);
+          });
+      }, []);
+
+      const categories = resources;
+      const activeCategory = categories.find(cat => cat.id === selectedCategory);
+      const items = activeCategory ? activeCategory.items : [];
+
+      const filteredItems = items.filter(item =>
+        item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (item.description && item.description.toLowerCase().includes(searchTerm.toLowerCase()))
+      );
+
+      const getStatusIcon = (url) => {
+        if (!linkStatus[url]) return null;
+        const status = linkStatus[url];
+        if (status.broken) {
+          return (
+            <span 
+              className="status-badge broken" 
+              title={`Broken - Last checked: ${status.lastChecked}`}
+            >
+              ✗ Broken
+            </span>
+          );
+        }
+        if (status.warning) {
+          return (
+            <span 
+              className="status-badge warning" 
+              title={`Needs review - Last checked: ${status.lastChecked}`}
+            >
+              ⚠ Review
+            </span>
+          );
+        }
+        return (
+          <span 
+            className="status-badge active" 
+            title={`Active - Last checked: ${status.lastChecked}`}
+          >
+            ✓ Active
+          </span>
+        );
+      };
+
+      if (loading && resources.length === 0) {
+        return (
+          <div className="resource-hub">
+            <header className="hub-header">
+              <div className="header-content">
+                <h1>I&P Department Resources</h1>
+              </div>
+            </header>
+            <div className="loading">Loading resources...</div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="resource-hub">
+          <header className="hub-header">
+            <div className="header-content">
+              <h1>I&P Department Resources</h1>
+              <p>Quick access to policies, benefits, forms, and team information</p>
+            </div>
+          </header>
+
+          <div className="hub-container">
+            <aside className="sidebar">
+              <div className="search-box">
+                <input
+                  type="text"
+                  placeholder="Search resources..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="search-input"
+                />
+              </div>
+
+              <nav className="categories">
+                {categories.map(cat => (
+                  <button
+                    key={cat.id}
+                    className={`category-btn ${selectedCategory === cat.id ? 'active' : ''}`}
+                    onClick={() => {
+                      setSelectedCategory(cat.id);
+                      setSearchTerm('');
+                    }}
+                  >
+                    <span className="icon">{cat.icon}</span>
+                    <span className="label">{cat.name}</span>
+                    <span className="count">{cat.items.length}</span>
+                  </button>
+                ))}
+              </nav>
+            </aside>
+
+            <main className="content">
+              {activeCategory && (
+                <>
+                  <div className="section-header">
+                    <h2>{activeCategory.name}</h2>
+                    {activeCategory.description && (
+                      <p className="section-description">{activeCategory.description}</p>
+                    )}
+                  </div>
+
+                  {filteredItems.length > 0 ? (
+                    <>
+                      <div className="resources-grid">
+                        {filteredItems.map((item, idx) => (
+                          <a
+                            key={idx}
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="resource-card"
+                          >
+                            <div className="card-header">
+                              <h3>{item.title}</h3>
+                              {getStatusIcon(item.url)}
+                            </div>
+                            {item.description && (
+                              <p className="card-description">{item.description}</p>
+                            )}
+                            <div className="card-footer">
+                              <span className="resource-type">{item.type || 'Link'}</span>
+                              <span className="external-link">→</span>
+                            </div>
+                          </a>
+                        ))}
+                      </div>
+                      {lastChecked && (
+                        <div className="last-checked">
+                          Links last checked: {lastChecked}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="no-results">
+                      <p>No resources found matching your search.</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </main>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<ResourceHub />);
+  </script>
+</body>
+</html>
